@@ -55,7 +55,7 @@ app.use(express.json()); // JSONリクエストボディをパース
 
 // セッションCookieの有効期限 (5日をミリ秒単位で)
 // const EXPIRES_IN_MS = 60 * 60 * 24 * 1 * 1000;
-const EXPIRES_IN_MS = 60 * 60 * 1 * 1000;
+const EXPIRES_IN_MS = 60 * 60 * 24 * 1000;
 
 // 認証が必要なルートのためのミドルウェア
 const isAuthenticated = async (

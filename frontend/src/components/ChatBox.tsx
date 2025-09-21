@@ -1,10 +1,18 @@
 // src/components/ChatBox.tsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, type HTMLAttributes } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AGENT_NAME, APP_URL } from "../config";
 import robotIcon from "../assets/robot.svg";
-import { useAtomValue } from "jotai"; // Removed useSetAtom as it's not used here
-import { sessionTokenAtom, userIdAtom } from "../atoms"; // Import userIdAtom
+import { useAtom, useAtomValue } from "jotai";
+import {
+  sessionTokenAtom,
+  userIdAtom,
+  scenesAtom,
+  type Scene,
+  promptQueueAtom,
+} from "../atoms";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Message {
   sender: "user" | "ai";
@@ -14,12 +22,19 @@ interface Message {
 
 interface ChatBoxProps {
   isAuthReady: boolean;
+  initialPrompt?: string | null;
 }
+
+interface CustomCodeProps extends HTMLAttributes<HTMLElement> {
+  node?: any;
+  inline?: boolean;
+}
+
 const mode = import.meta.env.MODE;
 const APP_BASE_URL =
   mode === "development" ? "http://localhost:8080" : `https://${APP_URL}`;
 
-const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
+const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -28,6 +43,23 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const sessionToken = useAtomValue(sessionTokenAtom);
   const userId = useAtomValue(userIdAtom); // Get userId from Jotai
+  const [scenes, setScenes] = useAtom(scenesAtom);
+  const [promptQueue, setPromptQueue] = useAtom(promptQueueAtom);
+
+  // initialPromptが渡されたら、それを最初のメッセージとして送信する
+  useEffect(() => {
+    if (initialPrompt && sessionId && !isLoading && messages.length === 0) {
+      handleSendMessage(initialPrompt);
+    }
+  }, [initialPrompt, sessionId]);
+
+  // VideoParameterから渡されたプロンプトを監視して送信する
+  useEffect(() => {
+    if (promptQueue && !isLoading) {
+      handleSendMessage(promptQueue);
+      setPromptQueue(null); // 送信後にキューをクリア
+    }
+  }, [promptQueue]);
 
   useEffect(() => {
     if (!userId && isAuthReady) {
@@ -42,14 +74,12 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
   // 画面ロード時にセッションIDを生成し、セッションを開始する
   useEffect(() => {
     const initializeSession = async () => {
-      setIsLoading(true);
       const querySessionId = searchParams.get("sessionId");
 
-      if (!userId || !sessionToken) {
+      if (!userId || !sessionToken || !querySessionId) {
         console.warn(
-          "Cannot initialize session: userId or sessionToken is missing. Waiting for authentication."
+          "Cannot initialize session: userId, sessionToken, or sessionId is missing."
         );
-        setIsLoading(false);
         return;
       }
 
@@ -92,40 +122,6 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
         }
       }
 
-      // 2. URLクエリにsessionIdがない、または取得に失敗した場合、新規セッションを作成
-      if (!sessionInitialized) {
-        try {
-          const API_ENDPOINT = `${APP_BASE_URL}/apps/${AGENT_NAME}/users/${userId}/sessions`;
-          const response = await fetch(API_ENDPOINT, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${sessionToken}`,
-            },
-          });
-
-          if (!response.ok) {
-            const errorData = await response.text();
-            throw new Error(`APIエラー: ${response.status} ${errorData}`);
-          }
-
-          const data = await response.json();
-          const newSessionId = data.id;
-          setSessionId(newSessionId);
-          setSearchParams({ sessionId: newSessionId }); // URLにsessionIdを追加
-          setMessages([]); // 新しいセッションなのでメッセージは空
-        } catch (error) {
-          console.error("セッションの初期化に失敗しました:", error);
-          const errorMessage: Message = {
-            sender: "ai",
-            text: `セッションの初期化中にエラーが発生しました: ${
-              error instanceof Error ? error.message : "不明なエラー"
-            }`,
-          };
-          setMessages([errorMessage]);
-        }
-      }
-
       setIsLoading(false);
     };
 
@@ -144,9 +140,26 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
     }
   }, [messages]);
 
-  const handleSendMessage = async () => {
+  const handleApplyParameters = (jsonString: string) => {
+    try {
+      const parsedJson = JSON.parse(jsonString);
+      // director_agentは単一のオブジェクトを返すので、配列でラップする
+      // VideoParameterコンポーネントはScene[]を期待している
+      if (Array.isArray(parsedJson)) {
+        setScenes(parsedJson as Scene[]);
+      } else {
+        setScenes([parsedJson as Scene]);
+      }
+      // TODO: ユーザーへの成功通知（例: トーストメッセージ）
+    } catch (error) {
+      console.error("Failed to parse JSON and apply parameters:", error);
+      // TODO: ユーザーへのエラー通知
+    }
+  };
+  const handleSendMessage = async (prompt?: string) => {
+    const messageToSend = prompt || inputValue;
     if (
-      !inputValue.trim() ||
+      !messageToSend.trim() ||
       isLoading ||
       !sessionId ||
       !userId ||
@@ -154,7 +167,7 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
     )
       return; // Add checks for userId and sessionToken
 
-    const userMessage: Message = { sender: "user", text: inputValue };
+    const userMessage: Message = { sender: "user", text: messageToSend };
     setMessages((prev) => [...prev, userMessage]);
     const currentInput = inputValue;
     setInputValue("");
@@ -177,7 +190,7 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
           session_id: sessionId,
           new_message: {
             role: "user",
-            parts: [{ text: currentInput }],
+            parts: [{ text: messageToSend }],
           },
           streaming: true, // ストリーミングを有効にする
         }),
@@ -196,48 +209,69 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let accumulatedText = "";
+      let buffer = "";
 
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
+          // ストリームの最後にバッファに残っているデータを処理
+          if (buffer.startsWith("data: ")) {
+            const jsonData = buffer.substring(6);
+            if (jsonData) {
+              try {
+                JSON.parse(jsonData); // ここでパースを試みる
+              } catch (e) {
+                console.warn(
+                  "Stream ended with incomplete JSON data in buffer:",
+                  jsonData
+                );
+              }
+            }
+          }
           break;
         }
-        const chunk = decoder.decode(value, { stream: true });
-        console.log("Raw SSE chunk:", chunk); // 生のチャンクをコンソールに出力
+        buffer += decoder.decode(value, { stream: true });
+        console.log("Raw SSE chunk received, buffer is now:", buffer); // 生のチャンクとバッファの状態をコンソールに出力
 
-        // SSEのデータ形式 (data: {...}) をパース
-        const lines = chunk.split("\n");
-        for (const line of lines) {
+        console.log("改行インデックス", buffer.indexOf("\n"));
+        let newlineIndex;
+        while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.substring(0, newlineIndex);
+          buffer = buffer.substring(newlineIndex + 1);
+
           if (line.startsWith("data: ")) {
             const jsonData = line.substring(6);
+            if (!jsonData) continue; // 空のdata行はスキップ
+
             try {
               const parsedData = JSON.parse(jsonData);
               console.log("Parsed SSE data:", parsedData); // パースしたJSONをコンソールに出力
 
               if (
                 parsedData?.partial !== true &&
-                parsedData.content.parts.length > 0
+                parsedData.content?.parts?.length > 0
               ) {
-                for (let i = 0; i < parsedData.content.parts.length; i++) {
-                  if (parsedData.content.parts[i].text)
-                    accumulatedText += parsedData.content.parts[i].text;
-                }
-                // accumulatedText += parsedData.output;
-                setMessages((prev) =>
-                  prev.map((msg, index) =>
-                    index === prev.length - 1
-                      ? {
-                          ...msg,
-                          text: accumulatedText ?? "...",
-                          senderAgent: parsedData.author,
-                        }
-                      : msg
-                  )
-                );
+                parsedData.content.parts.forEach((part: any) => {
+                  if (part.text) {
+                    accumulatedText += part.text;
+                  }
+                });
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  const lastMessage = newMessages[newMessages.length - 1];
+                  if (lastMessage && lastMessage.sender === "ai") {
+                    lastMessage.text = accumulatedText;
+                    lastMessage.senderAgent = parsedData.author;
+                  }
+                  return newMessages;
+                });
               }
             } catch (e) {
-              // JSONパースエラーは無視（ストリームの途中で不完全なJSONが来ることがあるため）
+              console.warn(
+                "JSON parse error, probably incomplete JSON. Waiting for more chunks.",
+                jsonData
+              );
             }
           }
         }
@@ -258,11 +292,14 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
 
   return (
     <div
-      className="w-3/5 flex flex-col bg-surface-dark-200 p-4 rounded-lg shadow-lg h-full"
+      className="w-1/2 flex flex-col bg-surface-dark-200 p-4 rounded-lg shadow-lg h-full"
       style={{
         height: "calc(100vh - var(--header-height) - 3rem - 1rem)",
       }}
     >
+      {/* <div className="flex justify-between items-center mb-2 h-9">
+        <h2 className="text-lg font-semibold text-text-light">Chat</h2>
+      </div> */}
       <div
         ref={chatContainerRef}
         className="flex-grow space-y-4 overflow-y-auto pr-2 no-scrollbar"
@@ -286,9 +323,56 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
                         <span className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></span>
                       </div>
                     ) : (
-                      <p className="whitespace-pre-wrap text-left wrap-anywhere">
-                        {msg.text}
-                      </p>
+                      <div className="prose text-text-light text-start prose-pre:whitespace-pre-wrap prose-pre:break-words">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            code(props: CustomCodeProps) {
+                              const {
+                                node,
+                                inline,
+                                className,
+                                children,
+                                ...rest
+                              } = props;
+                              console.log(props);
+                              const match = /language-(\w+)/.exec(
+                                className || ""
+                              );
+                              const lang = match ? match[1] : "";
+                              const codeString = String(children).replace(
+                                /\n$/,
+                                ""
+                              );
+
+                              return !inline && lang === "json" ? (
+                                <div className="relative group">
+                                  <pre
+                                    {...rest}
+                                    className={`${className} p-0 mt-0 mb-0`}
+                                  >
+                                    <code>{children}</code>
+                                  </pre>
+                                  <button
+                                    onClick={() =>
+                                      handleApplyParameters(codeString)
+                                    }
+                                    className="absolute bottom-2 left-2 bg-brand-primary text-white text-xs font-bold py-1 px-2 rounded hover:bg-brand-primary-dark transition-colors opacity-0 group-hover:opacity-100"
+                                  >
+                                    Apply to Parameters
+                                  </button>
+                                </div>
+                              ) : (
+                                <code className={className} {...rest}>
+                                  {children}
+                                </code>
+                              );
+                            },
+                          }}
+                        >
+                          {msg.text}
+                        </ReactMarkdown>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -323,7 +407,7 @@ const ChatBox = ({ isAuthReady }: ChatBoxProps) => {
           disabled={isLoading}
         />
         <button
-          onClick={handleSendMessage}
+          onClick={() => handleSendMessage()}
           className="bg-brand-primary text-white p-4 rounded-full hover:bg-brand-primary-dark disabled:bg-surface-dark-400 disabled:cursor-not-allowed"
           disabled={isLoading || !inputValue.trim()}
         >

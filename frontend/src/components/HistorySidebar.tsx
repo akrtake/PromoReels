@@ -82,8 +82,8 @@ const HistorySidebar = ({
 
   return (
     <aside
-      className={`absolute bg-surface-dark-300 w-64 p-4 flex-shrink-0 transform transition-transform duration-300 ease-in-out z-10 left-48 ${
-        isOpen ? "translate-x-0" : "-translate-x-full"
+      className={`absolute bg-surface-dark-300 w-80 p-4 flex-shrink-0 transform transition-transform duration-300 ease-in-out z-10 right-0 ${
+        isOpen ? "translate-x-0" : "translate-x-full"
       }`}
       style={{ height: "calc(100vh - var(--header-height))" }}
     >

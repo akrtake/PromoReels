@@ -1,10 +1,22 @@
 // src/components/VideoPreview.tsx
 import React from "react";
 
-const VideoPreview: React.FC = () => {
+interface VideoPreviewProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+const VideoPreview = ({ isOpen, onClose }: VideoPreviewProps) => {
   return (
-    <div className="bg-surface-dark-200 p-6 rounded-lg shadow-lg flex-grow flex flex-col">
-      <h2 className="text-lg font-semibold mb-4">Video Preview / Results</h2>
+    <aside
+      className={`absolute bg-surface-dark-200 w-1/2 p-6 shadow-lg flex flex-col transform transition-transform duration-300 ease-in-out z-10 right-0 ${
+        isOpen ? "translate-x-0" : "translate-x-full"
+      }`}
+      style={{ height: "calc(100vh - var(--header-height))" }}
+    >
+      <h2 className="text-lg font-semibold mb-4 text-text-light">
+        Video Preview / Results
+      </h2>
 
       {/* Main Video Player */}
       <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center">
@@ -52,7 +64,7 @@ const VideoPreview: React.FC = () => {
           Share
         </button>
       </div>
-    </div>
+    </aside>
   );
 };
 

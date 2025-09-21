@@ -3,7 +3,6 @@ import React, { useState } from "react";
 const menuItems = [
   "Create Image",
   "Create Video",
-  "History",
   "Assets",
   "Gallery",
   "Howto",
@@ -11,18 +10,27 @@ const menuItems = [
 
 interface SidebarProps {
   onMenuClick: (item: string) => void;
+  isOpen: boolean;
+  onClose: () => void;
 }
 
-const Sidebar = ({ onMenuClick }: SidebarProps) => {
+const Sidebar = ({ onMenuClick, isOpen, onClose }: SidebarProps) => {
   const [activeItem, setActiveItem] = useState("Create Video");
 
   const handleClick = (item: string) => {
     setActiveItem(item);
     onMenuClick(item);
+    // メニュー項目をクリックしたらサイドバーを閉じる
+    onClose();
   };
 
   return (
-    <aside className="w-48 bg-surface-dark-200 p-4 flex-shrink-0 pt-6 z-20 relative">
+    <aside
+      className={`absolute bg-surface-dark-200 w-48 p-4 flex-shrink-0 pt-6 transform transition-transform duration-300 ease-in-out z-20 ${
+        isOpen ? "translate-x-0" : "-translate-x-full"
+      }`}
+      style={{ height: "calc(100vh - var(--header-height))" }}
+    >
       <nav>
         <ul>
           {menuItems.map((item) => (
