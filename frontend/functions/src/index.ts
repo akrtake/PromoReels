@@ -5,6 +5,7 @@ import express = require("express");
 import cookieParser = require("cookie-parser");
 import * as path from "path";
 import * as fs from "fs";
+import cors = require("cors");
 
 if (
   process.env.FUNCTIONS_EMULATOR === "true" ||
@@ -31,6 +32,24 @@ if (
 
 // Expressアプリの初期化
 const app = express();
+const allowedOrigins =
+  process.env.FUNCTIONS_EMULATOR === "true"
+    ? ["http://localhost:5173", "http://localhost:5002"]
+    : ["https://ai-agent-hackathon-aac78.web.app"];
+console.log(allowedOrigins);
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // リクエストのオリジンが許可リストに含まれているかチェック
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true, // リクエストにCookieを含めることを許可
+  methods: ["GET", "POST", "OPTIONS"], // 許可するHTTPメソッド
+};
+app.use(cors(corsOptions));
 app.use(cookieParser()); // Cookieをパースするミドルウェア
 app.use(express.json()); // JSONリクエストボディをパース
 
