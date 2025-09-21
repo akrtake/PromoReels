@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+/* prettier-ignore */
+@theme {
+
+    /* 全体の背景色 */
+    --color-background-dark: #1E1E28;
+
+    /* UI要素の背景色 (パネル、カードなど) */
+    --color-surface-dark-200: #2A2A3B; /* 主要なカード/パネル */
+    --color-surface-dark-300: #3A3A4A; /* チャット入力、選択されていないタブ、区切り線/ボーダー */
+    --color-surface-dark-400: #4A4A5A; /* AIアシスタント応答、一部の区切り線/ボーダー */
+  
+    /* テキストカラー */
+    --color-text-light: #E0E0E0;       /* 一般的な白いテキスト、アクティブなアイコン、動画再生ボタン */
+    --color-text-muted: #A0A0A0;       /* サブテキスト、補助的な情報 */
+  
+    /* ブランド/アクセントカラー */
+    --color-brand-primary: #7A5AF0;    /* ボタン、スライダー、プログレスバー、アクティブなリング */
+    --color-brand-secondary: #5A5AF0;  /* 選択されているシーンタブ (ブランドプライマリと区別するため) */
+    --color-brand-primary-dark: #6A4BE0;
+  
+    /* アイコンの色 */
+    --color-icon-default: #808080;     /* アクティブでないアイコン */
+
+    /* レイアウト変数 */
+    --header-height: calc(3rem + 1px);
+}
+
+/* スクロールバーを非表示にするためのヘルパークラス */
+.no-scrollbar::-webkit-scrollbar {
+    display: none; /* Chrome, Safari, Opera */
+}
+.no-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}

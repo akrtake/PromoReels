@@ -1,0 +1,22 @@
+version: "3.8"
+services:
+  hackathon-agent-app:
+    # 現在のディレクトリにあるDockerfileを使用してイメージをビルド
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    env_file:
+      - ./movie_maker_agent/.env
+    # コンテナのポート8080をホストのポート8080にマッピング
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+      - ~/Work/GCP/keys/aiagenthackathon-469114-909a5d32add1.json:/app/keys/service-account-key.json
+      - ~/Work/GCP/keys/ai-agent-hackathon-aac78-firebase-adminsdk-fbsvc-856198eadc.json:/app/keys/firebase-service-account-key.json
+
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/keys/service-account-key.json
+      - FIREBASE_SERVICE_ACCOUNT_KEY=/app/keys/firebase-service-account-key.json
+    # コンテナがクラッシュした場合に自動的に再起動
+    restart: always

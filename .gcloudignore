@@ -1,0 +1,8 @@
+#!include:.gitignore
+.git/
+.gitignore
+Dockerfile.local
+docker-compose.yml
+cloud_functions/
+firebase_funcrions/
+frontend/

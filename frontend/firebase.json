@@ -1,0 +1,42 @@
+{
+  "hosting": {
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "redirects": [
+      {
+        "source": "/",
+        "destination": "/app",
+        "type": 301
+      }
+    ],
+    "rewrites": [
+      {
+        "source": "/api/sessionLogin",
+        "function": "appServer"
+      },
+      {
+        "source": "/api/sessionLogout",
+        "function": "appServer"
+      },
+      {
+        "source": "/api/checkSession",
+        "function": "appServer"
+      },
+      {
+        "source": "/api/getIdTokenFromCredentials",
+        "function": "appServer"
+      },
+      {
+        "source": "/app",
+        "function": "appServer"
+      },
+      {
+        "source": "/app/**",
+        "function": "appServer"
+      }
+    ]
+  },
+  "functions": {
+    "source": "functions"
+  }
+}
