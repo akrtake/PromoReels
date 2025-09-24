@@ -7,6 +7,7 @@ import ChatBox from "./components/ChatBox";
 import VideoParameters from "./components/VideoParameter";
 import VideoPreview from "./components/VideoPreview";
 import Sidebar from "./components/Sidebar";
+import HintModal from "./components/HintModal"; // HintModalをインポート
 import InitialScreen from "./components/InitialScreen";
 import {
   userIdAtom,
@@ -30,6 +31,7 @@ const App = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isHistorySidebarOpen, setIsHistorySidebarOpen] = useState(false);
   const [isVideoPreviewOpen, setIsVideoPreviewOpen] = useState(false);
+  const [isHintModalOpen, setIsHintModalOpen] = useState(false); // Hintモーダルの状態を追加
   const [isStarted, setIsStarted] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -172,6 +174,13 @@ const App = () => {
     }
   };
 
+  const handleOpenHintModal = () => {
+    setIsHintModalOpen(true);
+    // Hintモーダルを開く際は、他のサイドバーを閉じる
+    setIsSidebarOpen(false);
+    setIsHistorySidebarOpen(false);
+  };
+
   const handleChatViewClick = () => {
     setIsVideoPreviewOpen(false);
   };
@@ -256,6 +265,7 @@ const App = () => {
         onMenuToggle={() => setIsSidebarOpen((prev) => !prev)}
         onHistoryClick={() => handleMenuClick("History")}
         onVideoPreviewClick={handleVideoPreviewToggle}
+        // onOpenHintModal={() => setIsHintModalOpen(true)} // HeaderにはHintがないので不要
         onChatViewClick={handleChatViewClick}
         onNewChat={handleNewChat}
         onLogout={handleLogout}
@@ -266,6 +276,7 @@ const App = () => {
         <Sidebar
           isOpen={isSidebarOpen}
           onMenuClick={handleMenuClick}
+          onOpenHintModal={handleOpenHintModal} // SidebarにHintモーダルを開く関数を渡す
           onClose={() => setIsSidebarOpen(false)}
         />
         <HistorySidebar
@@ -276,6 +287,10 @@ const App = () => {
         <VideoPreview
           isOpen={isVideoPreviewOpen}
           onClose={() => setIsVideoPreviewOpen(false)}
+        />
+        <HintModal // HintModalをApp.tsxのルートレベルでレンダリング
+          isOpen={isHintModalOpen}
+          onClose={() => setIsHintModalOpen(false)}
         />
         <div
           className="flex-grow overflow-y-auto no-scrollbar"
