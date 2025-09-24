@@ -1,12 +1,14 @@
-import datetime
+import base64
 from google.cloud import storage
 import google.auth
 import google.auth.transport.requests
 import google.oauth2.id_token
 import functions_framework
 from firebase_admin import auth, credentials, initialize_app
-import json
 import os
+
+# from dotenv import load_dotenv
+# load_dotenv()
 
 service_account_key_path = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
 print(f"service_account_key_path: {service_account_key_path}")
@@ -18,7 +20,7 @@ else:
 
 
 @functions_framework.http
-def create_signed_url(request):
+def upload_file(request):
     """
     Firebase認証済みユーザーまたは別のGoogle Cloudサービスからのアクセスに対して、署名付きURLを生成します。
     """
@@ -79,46 +81,62 @@ def create_signed_url(request):
 
     if not is_authenticated:
         return ('Unauthorized: Invalid token', 401, headers)
+    
 
-    credentials, _ = google.auth.default()
-    credentials.refresh(google.auth.transport.requests.Request())
-    # POSTリクエストのみを許可
-    if request.method == 'POST':
-        request_json = request.get_json(silent=True)
-        if not request_json:
-            return ('Bad Request: Missing JSON body.', 400, headers)
-        bucket_name = request_json.get('bucketName')
-        file_name = request_json.get('fileName')
-        # リクエストボディから 'download' フラグを取得 (デフォルトは False)
-        is_download = request_json.get('download', False)
-    else:
-        return ('Method not allowed', 405, headers)
+    request_json = request.get_json(silent=True)
+    if not request_json or 'data' not in request_json or 'file_name' not in request_json:
+        return {'error': '必要な情報が提供されていません。'}, 400, headers
 
-    if not bucket_name or not file_name:
-        return ('Bad Request: Missing bucketName or fileName.', 400, headers)
+    data = request_json['data']
+    file_name = request_json['file_name']
 
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(file_name)
-
-    # is_downloadがTrueの場合、Content-Dispositionヘッダーを設定
-    response_disposition = None
-    if is_download:
-        # ファイル名をエンコードして、日本語などにも対応
-        encoded_filename = os.path.basename(file_name)
-        response_disposition = f"attachment; filename*=UTF-8''{encoded_filename}"
+    # ファイル名からユーザーIDを抽出
     try:
-        url = blob.generate_signed_url(
-            version="v4",
-            expiration=datetime.timedelta(minutes=10),
-            method="GET",
-            service_account_email=credentials.service_account_email,
-            access_token=credentials.token,
-            response_disposition=response_disposition,  # download=trueの場合に設定される
-        )
-        # 常に署名付きURLをJSONで返す
-        return (json.dumps({"signedUrl": url}), 200, headers)
+        parts = file_name.split('/')
+        if len(parts) < 2:
+            return {'error': 'ファイル名の形式が正しくありません。 (user_id/filename.ext)'}, 400, headers
+        
+        user_id = parts[0]
+        file_name_without_user = '/'.join(parts[1:])
+    except Exception as e:
+        return {'error': f'ファイル名の解析に失敗しました: {str(e)}'}, 400, headers
+    
+    # ユーザーIDの検証
+    # ユーザーIDが認証されたUIDと一致するか、または 'tmp' であるかを確認
+    if not (user_id == uid or user_id == 'tmp'):
+        return {'error': '認証情報とアップロード先のユーザーIDが一致しません。'}, 403, headers
+
+
+    # 環境変数からバケット名とフォルダ名を取得
+    # Cloud Functionsのデプロイ時に設定してください
+    bucket_name = os.environ.get('BUCKET_NAME')
+    folder_name = os.environ.get('FOLDER_NAME')
+
+    if not bucket_name or not folder_name:
+        return {'error': '環境変数が設定されていません。'}, 500, headers
+
+    try:
+        
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        print(storage_client, bucket)
+        # フォルダパスとファイル名を結合
+        destination_blob_name = f"{folder_name}/{file_name}"
+        blob = bucket.blob(destination_blob_name)
+
+        print(destination_blob_name,blob)
+
+        # base64エンコードされたデータをデコードしてアップロード
+        file_data = base64.b64decode(data)
+        blob.upload_from_string(file_data)
+
+        gs_url = f"gs://{bucket_name}/{destination_blob_name}"
+
+        response_message = f"ファイル '{file_name}' は '{destination_blob_name}' に正常にアップロードされました。"
+        return {
+            'message': response_message,
+            'gs_url': gs_url
+        }, 200, headers
 
     except Exception as e:
-        print(f"Error generating signed URL: {e}")
-        return (f"Internal Server Error: {e}", 500, headers)
+        return {'error': str(e)}, 500, headers

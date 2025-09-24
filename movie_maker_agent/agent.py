@@ -1,38 +1,41 @@
-import code
 import datetime
-from pickletools import bytes1
-from zoneinfo import ZoneInfo
-from google.adk.agents import Agent, LoopAgent, LlmAgent, BaseAgent, SequentialAgent
-from google.adk.events import Event, EventActions
-from google.adk.tools import FunctionTool,ToolContext
-from google.adk.agents.invocation_context import InvocationContext
+from operator import call
+from google.adk.agents import Agent, LlmAgent
+from google.adk.tools import ToolContext,agent_tool
+from google.adk.models import LlmResponse, LlmRequest
 from google.adk.agents.callback_context import CallbackContext
-from google.adk.models.lite_llm import LiteLlm
-from google.adk.sessions import DatabaseSessionService, VertexAiSessionService
-from google.adk.runners import Runner
+from google.adk.agents.invocation_context import InvocationContext
+from google.adk.events import Event
+from typing import AsyncGenerator, Optional
+from google.adk.agents import BaseAgent
 from google import genai
 from google.genai import types
-from typing import AsyncGenerator
 from google.genai.types import GenerateVideosConfig, Image
+import asyncio
 from google.auth.transport.requests import Request
 from google.oauth2 import id_token
 import requests
 import os
-import time
 from dotenv import load_dotenv
-from typing import Optional
+from typing_extensions import override
 from PIL import Image as PILImage
 from io import BytesIO
-import base64
 from google.cloud import storage
-import tempfile
+import re
+import logging
 
-
+import json
 # .envファイルから環境変数をロード
 load_dotenv()
 
+# --- Configure Logging ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 MODEL_GEMINI_2_5_FLASH = "gemini-2.5-flash"
 MODEL_GENAI_IMAGE = "gemini-2.5-flash-image-preview"
+VEO_MODEL = "veo-3.0-fast-generate-preview"
+
 
 genai_client = genai.Client()
 image_genai_client = genai.Client(location="global")
@@ -275,137 +278,392 @@ def get_location_images(query: str) -> dict:
         }
 
 
-
-
-async def send_to_veo3_api(tool_context: ToolContext,video_config_text: str) -> dict:
+async def _generate_video_for_scene(scene_name: str, prompt: str, user_id: str) -> Optional[dict]:
     """
-    Sends the generated video configuration to the Veo3 API for video creation.
+    1つのシーンの動画を生成します。
+    この関数は send_to_veo3_api から並列で呼び出されます。
     """
-    print(f"--- Tool: send_to_veo3_api called with video_config_text: {video_config_text[:100]}... ---\n")
-    # try:
-    #     image_data = PILImage.open('generated_image.png')
-    # except FileNotFoundError:
-    #     return {"status": "error", "error_message": "generated_image.png が見つかりません。"}
-    # except Exception as e:
-    #     return {"status": "error", "error_message": f"画像の読み込みに失敗しました: {e}"}
+    loop = asyncio.get_running_loop()
+    print(f"--- Starting video generation for scene: {scene_name} ---")
 
-    # 2. 画像をバイトデータに変換し、Base64でエンコードする
-    # buffered = BytesIO()
-    # image_data.save(buffered, format="PNG")
-    # image_bytes = buffered.getvalue()
-    # image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+    # user_id が存在する場合、出力パスに追加
+    final_output_gcs_uri = f"{output_gcs_uri}/{user_id}" if user_id else output_gcs_uri
 
+    # prompt (JSON文字列) をパースしてimageUrlを取得
     try:
-        # veo_image = Image(
-        #     # bytes_base64_encoded=image_base64,
-        #     gcs_uri="gs://ai-agent-hackathon-dist-akira2025/generated_image.png",
-        #     mime_type="image/png"
-        # )
-        operation = genai_client.models.generate_videos(
-            model="veo-3.0-generate-preview",
-            prompt=video_config_text,
-            # ｓimage=veo_image,
-            config=GenerateVideosConfig(
-                aspect_ratio="16:9",
-                output_gcs_uri=output_gcs_uri,
-            ),
+        print(prompt)
+        prompt_data = json.loads(prompt)
+        image_url = prompt_data.get("imageUrl")
+    except (json.JSONDecodeError, AttributeError):
+        image_url = None
+        print(f"Could not parse prompt or find imageUrl for scene '{scene_name}'. Proceeding without image.")
+
+    # generate_videosの引数を準備
+    generate_videos_args = {
+        "model": VEO_MODEL,
+        "prompt": prompt,
+        "config": GenerateVideosConfig(
+            aspect_ratio="16:9",
+            output_gcs_uri=final_output_gcs_uri,
+        ),
+    }
+
+    if image_url and image_url.startswith("gs://"):
+        print(f"Found imageUrl for scene '{scene_name}': {image_url}")
+        generate_videos_args["image"] = Image(
+            gcs_uri=image_url,
+            mime_type="image/png",  # ユーザーの指示通り "image/png" に固定
         )
 
+
+    try:
+        # generate_videosは同期的I/Oバウンドな操作なので、executorで実行します
+        operation = await loop.run_in_executor(
+            None,  # デフォルトのThreadPoolExecutorを使用
+            lambda: genai_client.models.generate_videos(**generate_videos_args)
+        )
+
+        # operation完了を待つ (ポーリング)
         while not operation.done:
-            time.sleep(15)
-            operation = genai_client.operations.get(operation)
-            print(operation)
+            print(f"Waiting for video generation for scene '{scene_name}'...")
+            await asyncio.sleep(15)  # 非同期sleep
+            # getも同期的I/Oバウンド
+            operation = await loop.run_in_executor(
+                None,
+                lambda: genai_client.operations.get(operation)
+            )
 
-        print(operation.response)
-        
-        if operation.response:
-            movies = tool_context.state.get("movie_urls",[])
-            print(movies)
-            movies.append(operation.response.generated_videos[0].video.uri)
-            tool_context.state["movie_urls"] = movies
-            
-            print(operation.result.generated_videos[0].video.uri)
-            try:
-                video_info = operation.response.generated_videos[0].video
-                gcs_uri = video_info.uri
-                mime_type = video_info.mime_type
-                print(f"Generated video GCS URI: {gcs_uri}")
-                print(f"MIME type: {mime_type}")
+        print(f"Operation finished for scene '{scene_name}'")
 
-                # # GCS URIからバケット名とオブジェクト名（blob名）を解析
-                # if not gcs_uri.startswith("gs://"):
-                #     raise ValueError(f"Invalid GCS URI format: {gcs_uri}")
-                
-                # path_parts = gcs_uri.replace("gs://", "").split("/", 1)
-                # bucket_name = path_parts[0]
-                # blob_name = path_parts[1]
+        if operation.error:
+            print(f"Error generating video for scene '{scene_name}': {operation.error}")
+            return {"scene_name": scene_name, "gcs_url": None, "error": str(operation.error)}
 
-                # # GCSから動画ファイルをバイトデータとしてダウンロード
-                # storage_client = storage.Client()
-                # bucket = storage_client.bucket(bucket_name)
-                # blob = bucket.blob(blob_name)
-                # video_bytes = blob.download_as_bytes()
+        if operation.response and operation.response.generated_videos:
+            video_info = operation.response.generated_videos[0].video
+            gcs_uri = video_info.uri
+            print(f"Generated video for scene '{scene_name}': {gcs_uri}")
 
-                # # GCSからダウンロードしたバイトデータから直接Partオブジェクトを作成
-                # # movie_part = types.Part.from_bytes(data=video_bytes, mime_type=mime_type)
-                # movie_part = types.Part.from_uri(file_uri=gcs_uri, mime_type=mime_type)
-                # print(movie_part)
-                # version = await tool_context.save_artifact(filename="test.mp4", artifact=movie_part)
-                # print(f"Artifact saved successfully. Version: {version}")
-            except Exception as e:
-                print(f"Error saving artifact: {e}")
-            return {
-                "status": "success",
-                "message": f"Video configuration successfully sent to Veo3 API. Response: {operation.response}",
-                "veo3_response": operation.response
-            }
+            # GCS URIからバケット名とオブジェクト名を解析
+            if not gcs_uri.startswith("gs://"):
+                raise ValueError(f"Invalid GCS URI format: {gcs_uri}")
+            path_parts = gcs_uri.replace("gs://", "").split("/", 1)
+            bucket_name = path_parts[0]
+            blob_name = path_parts[1]
+
+            if gcs_uri:
+                return {"scene_name": scene_name, "gcs_url": gcs_uri}
+            else:
+                print(f"Failed to get signed URL for {gcs_uri}")
+                return {"scene_name": scene_name, "gcs_url": None, "error": "Failed to get signed URL"}
         else:
-            return {
-                "status": "error",
-                "error_message": f"Veo3 API returned an error: {operation.error}",
-                "veo3_response": operation.error
-            }
-    except requests.exceptions.RequestException as e:
-        return {
-            "status": "error",
-            "error_message": f"Failed to connect to Veo3 API: {e}",
-        }
+            return {"scene_name": scene_name, "gcs_url": None, "error": "No video generated"}
+
     except Exception as e:
+        print(f"An unexpected error occurred in _generate_video_for_scene for '{scene_name}': {e}")
+        return {"scene_name": scene_name, "gcs_url": None, "error": str(e)}
+
+
+
+async def send_to_veo3_api(tool_context: ToolContext,scene_prompts: dict) -> dict:
+    """
+    シーンごとのプロンプトの辞書を受け取り、各シーンの動画を並列で生成
+    """
+    print(f"--- Tool: send_to_veo3_api called with scene_prompts: {scene_prompts} ---\n")
+    prompts_dict = scene_prompts
+    print(prompts_dict)
+
+    # tool_context.stateからmovie_urlsを取得。なければ初期化。
+    # 以前の実行でリストが保存されている可能性があるため、型をチェックして辞書であることを保証します。
+    movies = tool_context.state.get("movie_urls")
+    print(movies)
+    if not isinstance(movies, dict):
+        movies = {}
+    print(movies)
+    for scene_name in prompts_dict.keys():
+        print(scene_name)
+        if scene_name not in movies:
+            movies[scene_name] = []
+
+    user_id = tool_context.state.get("user_id", "")
+
+
+    # 各シーンの動画生成タスクを作成
+    tasks = [_generate_video_for_scene(scene_name, prompt,user_id) for scene_name, prompt in prompts_dict.items()]
+
+    # タスクを並列実行
+    results = await asyncio.gather(*tasks)
+
+    success_count = 0
+    error_messages = []
+    # 結果を処理
+    for result in results:
+        if result and result.get("gcs_url"):
+            scene_name = result["scene_name"]
+            gcs_url = result["gcs_url"]
+            movies[scene_name].append(gcs_url)
+            success_count += 1
+        elif result and result.get("error"):
+            scene_name = result.get("scene_name", "Unknown Scene")
+            error_messages.append(f"Scene '{scene_name}': {result['error']}")
+
+    tool_context.state["movie_urls"] = movies
+    print(f"Updated movie_urls in state: {movies}")
+    print(f"Error messages: {error_messages}")
+
+    if success_count > 0:
+        success_message = f"Successfully generated videos for {success_count}/{len(tasks)} scenes."
+        if error_messages:
+            success_message += f" However, some scenes failed: {'; '.join(error_messages)}"
+
+        return {
+            "status": "success",
+            "message": success_message,
+            "movie_urls": movies
+        }
+    else:
         return {
             "status": "error",
-            "error_message": f"An unexpected error occurred while sending to Veo3 API: {e}",
+            "message": f"Failed to generate any videos. Details: {'; '.join(error_messages)}"
+            if error_messages
+            else "Failed to generate any videos with no specific error details.",
+            "movie_urls": movies
         }
+
+def save_request_title_callback(
+    callback_context: CallbackContext, llm_request: LlmRequest
+) -> Optional[LlmResponse]:
+    """Inspects the LLM request and saves the title on the first request only."""
+
+    agent_name = callback_context.agent_name
+    print(f"[Callback] Invocation id: {callback_context.invocation_id}")
+
+    # Inspect the last user message in the request contents
+    last_user_message = ""
+    if llm_request.contents and llm_request.contents[-1].role == 'user':
+         if llm_request.contents[-1].parts:
+            last_user_message = llm_request.contents[-1].parts[0].text
+            print(last_user_message)
+
+            first_request = callback_context.state.get("first_request", True)
+            if first_request:
+                callback_context.state["first_request"] = False
+                callback_context.state["title"] = last_user_message
+    print(f"[Callback] Saved title: '{last_user_message}'. Proceeding with LLM call.")
+    return None
+
+def show_userid_callback(
+    callback_context: CallbackContext, llm_request: LlmRequest
+) -> Optional[LlmResponse]:
+    """Inspects the LLM request and saves the title on the first request only."""
+
+    # user_id = callback_context.user_id
+    user_content = callback_context.user_content
+    # print(f"[Callback] User id: {user_id}")
+    print(f"[Callback] User content: {user_content}")
+    print(f"[Callback] context: {callback_context}")
+
+    return None
 
 # --- エージェント定義 ---
 
+
+class DirectorAgent(BaseAgent):
+    """
+    Custom agent for video generation and save workflows.
+    """
+    director: LlmAgent
+    model_config = {"arbitrary_types_allowed": True}
+
+    def __init__(
+        self,
+        name: str,
+        director: LlmAgent,
+    ):
+        # Define the sub_agents list for the framework
+        sub_agents_list = [
+            director
+        ]
+
+        # Pydantic will validate and assign them based on the class annotations.
+        super().__init__(
+            name=name,
+            director=director,
+            sub_agents=sub_agents_list, # Pass the sub_agents list directly
+        )
+
+    @override
+    async def _run_async_impl(
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
+        """
+        Implements the custom orchestration logic for the workflow.
+        Uses the instance attributes assigned by Pydantic
+        """
+        logger.info(f"[{self.name}] Starting direction workflow.")
+
+        user_id_from_state = ctx.session.state.get("user_id", "")
+        if not user_id_from_state: # user_idが空文字列の場合にのみ実行
+            user_id = ctx.user_id
+            logger.info(f"[{self.name}] User ID-------------: {user_id}")
+            if user_id:
+                ctx.session.state["user_id"] = user_id
+
+        # renderer
+        logger.info(f"[{self.name}] Running Director...")
+        async for event in self.director.run_async(parent_context=ctx):
+            # logger.info(f"[{self.name}] Event from Renderer: {event.model_dump_json(indent=2, exclude_none=True)}")
+            yield event
+
+
 # Researcher Agent (情報収集に特化)
-researcher_agent = Agent(
-    model=MODEL_GEMINI_2_5_FLASH,
-    name="researcher_agent",
-    instruction="""You are the Researcher Agent. Your task is to perform information gathering for other agents.
-                Use the 'get_location_images' tool when the user or another agent asks for images of a place or landmark.
-                You are responsible for gathering all necessary information, including images and web data.
-                Do not create video configurations or send to Veo3.""",
-    description="Performs web and image searches to support other agents.",
-    tools=[get_location_images],
+# researcher_agent = Agent(
+#     model=MODEL_GEMINI_2_5_FLASH,
+#     name="researcher_agent",
+#     instruction="""You are the Researcher Agent. Your task is to perform information gathering for other agents.
+#                 Use the 'get_location_images' tool when the user or another agent asks for images of a place or landmark.
+#                 You are responsible for gathering all necessary information, including images and web data.
+#                 Do not create video configurations or send to Veo3.""",
+#     description="Performs web and image searches to support other agents.",
+#     tools=[get_location_images],
+# )
+
+# stateに保存
+async def save_theme_list(tool_context: ToolContext, theme_dict: dict)->dict:
+    tool_context.state["theme_list"] = theme_dict
+    print(f"[SAVE THEME] Updated theme_list in state: {theme_dict}")
+    return theme_dict
+
+
+# 動画のシーンをざっくり決めて方針を決める
+scene_agent = Agent(
+     model=MODEL_GEMINI_2_5_FLASH,
+    name="scene_agent",
+    instruction="""You are an agent that determines the overall direction and scene breakdown for a video. Your task is to work with the user to create a video structure, typically composed of multiple 8-second scenes.
+ 
+    Your job:
+    - Create and summarize ideas for the video.
+    - If there is not enough information, first ask the user for information such as the purpose and target audience.
+    - Decide with the user on the video's length and the number of scenes. I recommend about 30 seconds.
+    - Describe the location, atmosphere, and purpose as specifically as possible.
+    - Offer additional recommendations to the user's suggestions.
+    - **IMPORTANT**: Please create the plan in the format below and pass to the `save_theme_list` tool. Pass a Python dictionary (`dict`) that follows the specified structure to the `theme_dict` argument.
+    
+    The dictionary for the `theme_dict` argument of the `save_theme_list` tool must follow this structure:
+    ```json
+    {
+      "scene1": "Summary of scene 1 in Japanese",
+      "scene2": "Summary of scene 2 in Japanese",
+      "scene3": "Summary of scene 3 in Japanese",
+      "scene4": "Summary of scene 4 in Japanese",
+      "scene5": "Summary of scene 5 in Japanese"
+    }
+    ```
+
+    - **IMPORTANT**: After the tool call is complete, output the final plan in Markdown format.
+    - Create alternative versions upon request.
+    - If asked to change or add a specific scene, create a new scene while maintaining the overall balance of the video.
+    - If asked to delete or reorder scenes, do so as requested.
+    """,
+    description="Creates a proposal for the video's scene breakdown.",
+    tools=[save_theme_list],
+    before_model_callback=save_request_title_callback
 )
 
-# Director Agent (動画構成の作成に特化)
-director_agent = Agent(
+
+
+# Renderer Agent (動画作成の最終プロセスに特化)
+renderer_agent = Agent(
     model=MODEL_GEMINI_2_5_FLASH,
-    name="director_agent",
+    name="renderer_agent",
+    instruction="""You are the Renderer Agent. Your task is to process a video configuration received in a specific JSON format.
+                First, translate the entire JSON content into English.
+                Then, use the 'send_to_veo3_api' tool to initiate the video creation process, passing the translated JSON as the input.
+                You should only be called after a full video configuration has been generated by another agent.
+                Do not modify the JSON structure; only translate the values of its fields.
+                You are a final stage processor, not a creator.
+
+                Handle cases with multiple scenes.
+                Pass all scene information to the `send_to_veo3_api` tool in the JSON format shown below. All text must be in English. The prompt JSON for each scene should be a string.
+                ```json
+                {
+                    "scene1": "prompt json for scene 1",
+                    "scene2": "prompt json for scene 2",
+                    ...
+                }
+                ```
+                
+                動画生成が成功または失敗か、そしてそのメッセージを日本語で返してください。成功の場合は、”動画ページを開いて確認してください。”と伝えてください。
+                """,
+    description="Translates the video configuration JSON to English and sends it to the Veo3 API for rendering.",
+    tools=[send_to_veo3_api],
+)
+
+
+
+
+image_generate_agent = Agent(
+    model=MODEL_GEMINI_2_5_FLASH,
+    name="imagen_agent",
+    instruction="""
+あなたは画像を生成、編集、またはマージする専門家です。
+ユーザーが2枚の画像をマージしてほしいと指示している場合、`merge_images`ツールを使用することを検討してください。作成された画像のsigned_urlを返してください。
+ユーザーからの指示には、マージ方法や最終的な画像に関する詳細な説明が含まれる場合があります。それらの情報を`text_input`引数に含めてください。
+""",
+    description="Translates the video configuration JSON to English and sends it to the Veo3 API for rendering.",
+    tools=[merge_images],
+)
+
+# state に保存するツール
+async def save_prompt_list(tool_context: ToolContext,scene_number:str, prompt_dict: dict)->dict:
+    """Saves the prompt dictionary for a specific scene to the session state after normalizing the scene number."""
+    # Normalize the scene_number to handle variations like "シーン1", "scene１_cut1", etc.
+    # 1. Convert full-width numbers to half-width
+    normalized_scene_number = scene_number.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    # 2. Replace Japanese "シーン" with "scene" (case-insensitive)
+    normalized_scene_number = normalized_scene_number.lower().replace("シーン", "scene")
+
+    # 3. Extract the "scene<number>" part to remove extra text like "_cut1"
+    match = re.search(r"scene(\d+)", normalized_scene_number)
+    if match:
+        final_scene_number = f"scene{match.group(1)}"
+    else:
+        # As a fallback, try to find any number if "scene" prefix is missing
+        num_match = re.search(r"(\d+)", normalized_scene_number)
+        if num_match:
+            final_scene_number = f"scene{num_match.group(1)}"
+        else:
+            # If no number can be found, use the original string and log a warning
+            print(f"Warning: Could not properly normalize scene_number '{scene_number}'. Using it as is.")
+            final_scene_number = scene_number
+
+    prompts = tool_context.state.get("scene_config",{})
+    prompts[final_scene_number] = prompt_dict
+    tool_context.state["scene_config"] = prompts
+    print(f"Scene: {final_scene_number} (Original: '{scene_number}')")
+    print(f"Updated prompt_list in state: {prompt_dict}")
+    return prompt_dict
+
+# プロンプト作成エージェント
+veo_prompt_agent = Agent(
+    model=MODEL_GEMINI_2_5_FLASH,
+    name="veo_prompt_agent",
     instruction="""
     You are an assistant that helps creators turn natural language video ideas into structured JSON prompts for Google Veo 3.
     You always follow a consistent format, using cinematic, specific, and visually rich language.
 
     Your job:
-    1. Take user ideas written in natural language.
-    2. Return a complete, properly structured JSON prompt.
-    3. Maintain cinematic, specific, and visually rich language.
-    4. Ask clarifying questions if the idea is unclear.
-    5. Offer alternative versions or edits when asked.
+    -  Take user ideas written in natural language.
+    -  Ensure the generated prompt describes an action or scene that can be completed within 8 seconds.
+    -  Return a complete, properly structured JSON prompt.
+    -  Maintain cinematic, specific, and visually rich language.
+    -  Ask clarifying questions if the idea is unclear.
+    -  Offer alternative versions or edits when asked.
+    -  If a user's request to modify a prompt seems like it won't fit within 8 seconds, point it out and offer a suggestion. **IMPORTANT: Make this judgment by focusing on the `description` field, which outlines the core visual action of the scene.**
+    -  When the JSON prompt is complete, call the `save_prompt_list` tool. Pass the generated JSON as the `prompt_dict` argument. For the `scene_number` argument, use a string that combines 'scene' with the scene number (e.g., 'scene1' for the first scene, 'scene2' for the second).
+    -  After the tool completes execution, output a response including the JSON in the same format below.
 
-    JSON prompts must follow this structure:
+    JSON prompts must follow this structure. Unless otherwise specified, create the JSON value in Japane.
     ```json
     {
       "description": "Cinematic summary of the scene-what happens visually",
@@ -423,56 +681,72 @@ director_agent = Agent(
       "text": "Usually 'none' unless on-screen text is mentioned",
       "keywords": [
         "descriptive tags that reinforce theme, tone, or subject"
-      ]
+      ],
+      "imageUrl": "This is a value set by the user. Optional"
     }
     ```
     This is a blueprint for video generation. Each field controls one part of the video. Never invent your own structure or rearrange the fields. Stick to the format.
-
+    
     You are not a general-purpose assistant. You are a Google Veo 3 JSON blueprint generator.
     """,
-    description="Generates a structured video production plan for Veo3, optionally using research results.",
-    # tools=[get_video_configuration],
-    output_key="video_config"
+    description="Generates a structured video production plan for Veo3.",
+    tools=[save_prompt_list],
 )
 
-# Renderer Agent (動画作成の最終プロセスに特化)
-renderer_agent = Agent(
-    model=MODEL_GEMINI_2_5_FLASH,
-    name="renderer_agent",
-    instruction="""You are the Renderer Agent. Your task is to process a video configuration received in a specific JSON format.
-                First, translate the entire JSON content into English.
-                Then, use the 'send_to_veo3_api' tool to initiate the video creation process, passing the translated JSON as the input.
-                You should only be called after a full video configuration has been generated by another agent.
-                Do not modify the JSON structure; only translate the values of its fields.
-                You are a final stage processor, not a creator.""",
-    description="Translates the video configuration JSON to English and sends it to the Veo3 API for rendering.",
-    tools=[send_to_veo3_api],
-)
 
-image_generate_agent = Agent(
+# Director Agent (動画構成の作成に特化)
+director_agent = Agent(
     model=MODEL_GEMINI_2_5_FLASH,
-    name="imagen_agent",
+    name="director_agent",
     instruction="""
-あなたは画像を生成、編集、またはマージする専門家です。
-ユーザーが2枚の画像をマージしてほしいと指示している場合、`merge_images`ツールを使用することを検討してください。作成された画像のsigned_urlを返してください。
-ユーザーからの指示には、マージ方法や最終的な画像に関する詳細な説明が含まれる場合があります。それらの情報を`text_input`引数に含めてください。
-""",
-    description="Translates the video configuration JSON to English and sends it to the Veo3 API for rendering.",
-    tools=[merge_images],
+    You are an assistant that helps creators turn natural language video ideas into structured JSON prompts for Google Veo 3.
+    You always follow a consistent format, using cinematic, specific, and visually rich language.
+
+    Your job:
+    
+    The main tasks are as follows:
+    - Deciding on scenes
+    - Creating prompts for video creation
+    - Creating videos from prompts
+    
+    1. Take user ideas written in natural language.
+    2. Roughly determine the shot composition for the video. Delegate shot composition to scene_agent. Present the scene proposal results to the user exactly as received.
+    3. Once the user approves the shot composition proposal, discuss each shot's details with the user and determine the prompt accordingly.
+    4. Delegate the creation of each shot's prompt to the veo_prompt_agent. Instructions to the veo_prompt_agent must always include the scene number
+       Present the prompt suggestions to the user exactly as they are generated. Confirm any requested modifications with the user.
+    5. If requested to add, remove, or modify shots, always communicate this to scene_agent to recreate the composition.
+    6. If requested to modify a shot prompt, communicate this to veo_prompt_agent.
+    7. If it is difficult to determine whether a change requires modifying the shot composition or the prompt, confirm with the user.
+    8. If the user requests video creation, pass the prompt JSON to the renderer_agent to generate the video. **IMPORTANT**: Instructions to the renderer_agent must always include the scene number.
+       However, if the prompt JSON for all scenes is incomplete or user confirmation is pending, inform the user directly without using the renderer_agent.
+
+    """,
+    description="Generates a structured video production plan for Veo3.",
+    tools=[agent_tool.AgentTool(agent=scene_agent),agent_tool.AgentTool(agent=veo_prompt_agent),agent_tool.AgentTool(agent=renderer_agent)],
+    
 )
 
-# Supervisor Agent (全体の司令塔)
+director_workflow_agent =DirectorAgent(
+    name="director_workflow_agent",
+    director=director_agent,
+)
+
+
+
+# Supervisor Agent (振り分け)
 root_agent = Agent(
     name="supervisor_agent",
     model=MODEL_GEMINI_2_5_FLASH,
     description="The main coordinator agent. Delegates tasks to specialized sub-agents based on user requests.",
-    instruction="""You are the main Supervisor Agent, coordinating a team of specialists.
+    instruction="""You are the main Supervisor Agent, coordinating a team of specialists.Unless otherwise specified, please converse in Japanese.
                 Your primary responsibility is to analyze the user's query and delegate the task to the correct agent.
                 You have specialized sub-agents:
-                1. 'director_agent': Handles all video-related requests, including generating outlines and conducting research for location suggestions if needed.
-                2. 'renderer_agent': Sends video configurations to Veo3 for video creation.
-                3. 'image_generate_agent': Generate and merge image.
+                1. 'director_workflow_agent': Mainly capable of the following:
+                  - Deciding on scenes
+                  - Creating prompts for video creation
+                  - Creating videos from prompts
+                2. 'image_generate_agent': Generate and merge image.
                 Delegate to the appropriate agent. If a task doesn't fit any specialist, respond appropriately.""",
-    # tools=[yeild_test],
-    sub_agents=[director_agent,researcher_agent, renderer_agent,image_generate_agent], # researcher_agentを直接ここに追加しない
+    sub_agents=[director_workflow_agent,image_generate_agent],
+    before_model_callback=show_userid_callback
 )

@@ -92,7 +92,7 @@ const isAuthenticated = async (
 
 app.get("/api/checkSession", async (req, res) => {
   const sessionCookie = req.cookies.__session || "";
-  const uid = req.cookies.uid || "";
+  // const uid = req.cookies.uid || "";
 
   if (!sessionCookie) {
     return res.status(401).send({ error: "No session cookie found." });
@@ -107,7 +107,7 @@ app.get("/api/checkSession", async (req, res) => {
     // 検証に成功した場合、Cookieの情報を返却
     return res.status(200).send({
       sessionToken: sessionCookie,
-      userId: uid,
+      userId: decodedClaims.uid,
       email: decodedClaims.email,
       decodedClaims: decodedClaims,
     });
@@ -234,7 +234,7 @@ app.get(
       "Protected SPA/Static route called. Original URL:",
       req.originalUrl
     );
-    console.log("Request Path:", req.path);
+    // console.log("Request Path:", req.path);
 
     let filePathToServe: string;
     let baseDirForFiles = path.join(__dirname, "..", "app"); // ファイルを探すベースディレクトリを 'dist/app' に設定
@@ -253,12 +253,12 @@ app.get(
       //      -> filePathToServe = 'dist/app/assets/aaaaa.js'
       const remainingPath = req.path.substring("/app/".length); // '/apps/' 以降のパスを取得
       filePathToServe = path.join(baseDirForFiles, remainingPath);
-      console.log(`Serving specific file within app: ${filePathToServe}`);
+      // console.log(`Serving specific file within app: ${filePathToServe}`);
     }
     // その他のパターン (基本的にはここには来ないはずだが、念のため)
     else {
       filePathToServe = path.join(baseDirForFiles, "index.html");
-      console.log(`Serving app index as fallback: ${filePathToServe}`);
+      // console.log(`Serving app index as fallback: ${filePathToServe}`);
     }
 
     // ファイルが存在するか確認し、存在すれば送信。存在しなければデフォルトの index.html を送信
@@ -269,7 +269,7 @@ app.get(
         );
         res.sendFile(path.join(baseDirForFiles, "index.html"));
       } else {
-        console.log(`Successfully serving file: ${filePathToServe}`);
+        // console.log(`Successfully serving file: ${filePathToServe}`);
         res.sendFile(filePathToServe);
       }
     });

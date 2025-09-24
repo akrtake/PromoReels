@@ -2,13 +2,12 @@
 import React, { useState, useEffect, useRef, type HTMLAttributes } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AGENT_NAME, APP_URL } from "../config";
-import robotIcon from "../assets/robot.svg";
-import { useAtom, useAtomValue } from "jotai";
+import robotIcon from "../assets/robot.svg"; // useSetAtom をインポート
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
   sessionTokenAtom,
   userIdAtom,
-  scenesAtom,
-  type Scene,
+  sessionStateAtom,
   promptQueueAtom,
 } from "../atoms";
 import ReactMarkdown from "react-markdown";
@@ -40,11 +39,21 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const sessionToken = useAtomValue(sessionTokenAtom);
   const userId = useAtomValue(userIdAtom); // Get userId from Jotai
-  const [scenes, setScenes] = useAtom(scenesAtom);
+  const setSessionState = useSetAtom(sessionStateAtom); // sessionState を更新するための setter を取得
+  const [historyRestoredFromState, setHistoryRestoredFromState] =
+    useState(false);
+  const [showQuickReplies, setShowQuickReplies] = useState(false); // クイック返信リストの表示状態
+  const quickReplyRef = useRef<HTMLDivElement>(null); // クイック返信エリアのref
   const [promptQueue, setPromptQueue] = useAtom(promptQueueAtom);
+  const quickReplies = ["OKです", "おまかせでお願い！", "返事は？"];
+
+  const toggleQuickReplies = () => {
+    setShowQuickReplies((prev) => !prev);
+  };
 
   // initialPromptが渡されたら、それを最初のメッセージとして送信する
   useEffect(() => {
@@ -52,6 +61,22 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
       handleSendMessage(initialPrompt);
     }
   }, [initialPrompt, sessionId]);
+
+  // クイック返信リストの外側をクリックしたときに閉じる
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        quickReplyRef.current &&
+        !quickReplyRef.current.contains(event.target as Node)
+      ) {
+        setShowQuickReplies(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   // VideoParameterから渡されたプロンプトを監視して送信する
   useEffect(() => {
@@ -140,22 +165,16 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
     }
   }, [messages]);
 
-  const handleApplyParameters = (jsonString: string) => {
-    try {
-      const parsedJson = JSON.parse(jsonString);
-      // director_agentは単一のオブジェクトを返すので、配列でラップする
-      // VideoParameterコンポーネントはScene[]を期待している
-      if (Array.isArray(parsedJson)) {
-        setScenes(parsedJson as Scene[]);
-      } else {
-        setScenes([parsedJson as Scene]);
-      }
-      // TODO: ユーザーへの成功通知（例: トーストメッセージ）
-    } catch (error) {
-      console.error("Failed to parse JSON and apply parameters:", error);
-      // TODO: ユーザーへのエラー通知
+  // テキストエリアの高さ自動調整
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = "auto"; // 高さを一度リセット
+      const scrollHeight = textarea.scrollHeight;
+      textarea.style.height = `${scrollHeight}px`; // 内容に合わせた高さに設定
     }
-  };
+  }, [inputValue]);
+
   const handleSendMessage = async (prompt?: string) => {
     const messageToSend = prompt || inputValue;
     if (
@@ -232,9 +251,9 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
           break;
         }
         buffer += decoder.decode(value, { stream: true });
-        console.log("Raw SSE chunk received, buffer is now:", buffer); // 生のチャンクとバッファの状態をコンソールに出力
+        // console.log("Raw SSE chunk received, buffer is now:", buffer); // 生のチャンクとバッファの状態をコンソールに出力
 
-        console.log("改行インデックス", buffer.indexOf("\n"));
+        // console.log("改行インデックス", buffer.indexOf("\n"));
         let newlineIndex;
         while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
           const line = buffer.substring(0, newlineIndex);
@@ -246,7 +265,7 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
 
             try {
               const parsedData = JSON.parse(jsonData);
-              console.log("Parsed SSE data:", parsedData); // パースしたJSONをコンソールに出力
+              // console.log("Parsed SSE data:", parsedData); // パースしたJSONをコンソールに出力
 
               if (
                 parsedData?.partial !== true &&
@@ -261,8 +280,9 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
                   const newMessages = [...prev];
                   const lastMessage = newMessages[newMessages.length - 1];
                   if (lastMessage && lastMessage.sender === "ai") {
-                    lastMessage.text = accumulatedText;
+                    lastMessage.text = accumulatedText || "...";
                     lastMessage.senderAgent = parsedData.author;
+                    // console.log("Updated AI message:", lastMessage);
                   }
                   return newMessages;
                 });
@@ -286,15 +306,72 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
+      // AIの応答が完了したら、セッション情報を再取得して sessionState を更新する
+      if (sessionId && userId && sessionToken) {
+        try {
+          const isValidUrl = (
+            urlString: string | undefined | null
+          ): boolean => {
+            if (!urlString) return false;
+            try {
+              // 簡単なチェックとして、http, https, gs, blob, data スキームを許可
+              return /^(https?:\/\/|gs:\/\/|blob:|data:)/.test(urlString);
+            } catch (e) {
+              return false;
+            }
+          };
+
+          const sanitizeSceneConfig = (state: any) => {
+            if (!state?.scene_config) return state;
+            const newSceneConfig = { ...state.scene_config };
+            for (const key in newSceneConfig) {
+              const scene = newSceneConfig[key];
+              if (scene && !isValidUrl(scene.imageUrl)) {
+                scene.imageUrl = "";
+              }
+            }
+            return { ...state, scene_config: newSceneConfig };
+          };
+
+          const API_ENDPOINT = `${APP_BASE_URL}/apps/${AGENT_NAME}/users/${userId}/sessions/${sessionId}`;
+          const response = await fetch(API_ENDPOINT, {
+            method: "GET",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${sessionToken}`,
+            },
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.state) {
+              const sanitizedState = sanitizeSceneConfig(data.state);
+              setSessionState(sanitizedState);
+            }
+          } else {
+            console.error("Failed to fetch session state after message send.");
+          }
+        } catch (error) {
+          console.error(
+            "Error fetching session state after message send:",
+            error
+          );
+        }
+      }
       setIsLoading(false);
     }
   };
 
+  const handleQuickReplyClick = (replyText: string) => {
+    handleSendMessage(replyText); // 返信テキストを直接送信
+    setShowQuickReplies(false); // リストを閉じる
+  };
+
   return (
     <div
-      className="w-1/2 flex flex-col bg-surface-dark-200 p-4 rounded-lg shadow-lg h-full"
+      className="w-1/2 flex flex-col bg-surface-dark-200 px-4 py-3 rounded-lg shadow-lg h-full"
       style={{
-        height: "calc(100vh - var(--header-height) - 3rem - 1rem)",
+        height: "calc(100vh - var(--header-height) - 2rem)",
       }}
     >
       {/* <div className="flex justify-between items-center mb-2 h-9">
@@ -335,37 +412,100 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
                                 children,
                                 ...rest
                               } = props;
-                              console.log(props);
-                              const match = /language-(\w+)/.exec(
-                                className || ""
-                              );
-                              const lang = match ? match[1] : "";
-                              const codeString = String(children).replace(
-                                /\n$/,
-                                ""
-                              );
+                              // console.log(props);
 
-                              return !inline && lang === "json" ? (
-                                <div className="relative group">
-                                  <pre
-                                    {...rest}
-                                    className={`${className} p-0 mt-0 mb-0`}
-                                  >
-                                    <code>{children}</code>
-                                  </pre>
-                                  <button
-                                    onClick={() =>
-                                      handleApplyParameters(codeString)
-                                    }
-                                    className="absolute bottom-2 left-2 bg-brand-primary text-white text-xs font-bold py-1 px-2 rounded hover:bg-brand-primary-dark transition-colors opacity-0 group-hover:opacity-100"
-                                  >
-                                    Apply to Parameters
-                                  </button>
-                                </div>
+                              return !inline ? (
+                                <pre
+                                  {...rest}
+                                  className={`${className} p-0 mt-0 mb-0`}
+                                >
+                                  <code>{children}</code>
+                                </pre>
                               ) : (
                                 <code className={className} {...rest}>
                                   {children}
                                 </code>
+                              );
+                            },
+                            strong: (props: CustomCodeProps) => {
+                              const { children, ...rest } = props;
+                              return (
+                                <strong
+                                  className="font-extrabold text-text-light"
+                                  {...rest}
+                                >
+                                  {children}
+                                </strong>
+                              );
+                            },
+                            h1: (props: CustomCodeProps) => {
+                              const { children, ...rest } = props;
+                              return (
+                                <h1 className="text-white" {...rest}>
+                                  {children}
+                                </h1>
+                              );
+                            },
+                            h2: (props: CustomCodeProps) => {
+                              const { children, ...rest } = props;
+                              return (
+                                <h2
+                                  className="text-white text-xl mb-[0.5em]"
+                                  {...rest}
+                                >
+                                  {children}
+                                </h2>
+                              );
+                            },
+                            h3: (props: CustomCodeProps) => {
+                              const { children, ...rest } = props;
+                              return (
+                                <h3
+                                  className="text-white text-lg mb-[0.5em]"
+                                  {...rest}
+                                >
+                                  {children}
+                                </h3>
+                              );
+                            },
+                            h4: (props: CustomCodeProps) => {
+                              const { children, ...rest } = props;
+                              return (
+                                <h4 className="text-white mb-[0.5em]" {...rest}>
+                                  {children}
+                                </h4>
+                              );
+                            },
+                            a: (props: CustomCodeProps) => {
+                              const { children, ...rest } = props;
+                              return (
+                                <a className="text-text-muted" {...rest}>
+                                  {children}
+                                </a>
+                              );
+                            },
+                            li: (props: CustomCodeProps) => {
+                              const { children, ...rest } = props;
+                              return (
+                                <li className="my-[0.5em]" {...rest}>
+                                  {children}
+                                </li>
+                              );
+                            },
+                            ul: (props: CustomCodeProps) => {
+                              const { children, ...rest } = props;
+                              return (
+                                <ul className="my-[0.5em]" {...rest}>
+                                  {children}
+                                </ul>
+                              );
+                            },
+                            p: (props: CustomCodeProps) => {
+                              const { children, ...rest } = props;
+                              return (
+                                <p className="mt-[0.75em] mb-0" {...rest}>
+                                  {children}
+                                </p>
                               );
                             },
                           }}
@@ -389,24 +529,75 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
         )}
       </div>
 
-      <div className="mt-4 flex space-x-2">
-        <input
-          type="text"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              handleSendMessage();
+      <div className="mt-1">
+        <div className="flex items-end px-2">
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={(e) => {
+              // Shift+Enterで改行、Enterのみで送信
+              if (
+                e.key === "Enter" &&
+                !e.shiftKey &&
+                !e.nativeEvent.isComposing
+              ) {
+                e.preventDefault();
+                handleSendMessage();
+              }
+            }}
+            className="flex-grow bg-surface-dark-300 text-text-light px-4 py-3 rounded-3xl focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50 resize-none overflow-y-auto "
+            placeholder={
+              isLoading ? "応答を待っています..." : "メッセージを入力..."
             }
-          }}
-          className="flex-grow bg-surface-dark-300 text-text-light p-4 rounded-full focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
-          placeholder={
-            isLoading ? "応答を待っています..." : "メッセージを入力..."
-          }
-          disabled={isLoading}
-        />
-        <button
+            disabled={isLoading}
+          />
+          <div className="relative" ref={quickReplyRef}>
+            {/* クイック返信ボタン */}
+            <button
+              type="button"
+              onClick={toggleQuickReplies}
+              className="p-2 rounded-full text-text-light bg-brand-primary hover:bg-brand-primary-dark disabled:opacity-50 disabled:cursor-not-allowed ml-2 mb-1"
+              aria-label="クイック返信"
+              disabled={isLoading}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                />
+              </svg>
+            </button>
+
+            {/* クイック返信リスト */}
+            {showQuickReplies && (
+              <div className="absolute bottom-full right-0 mb-2 w-48 bg-surface-dark-300 border-brand-primary border-2 rounded-lg shadow-lg z-20">
+                <ul className="py-1">
+                  {quickReplies.map((reply, index) => (
+                    <li key={index}>
+                      <button
+                        onClick={() => handleQuickReplyClick(reply)}
+                        className="block w-full text-left px-4 py-2 text-sm text-text-light hover:bg-surface-dark-400"
+                      >
+                        {reply}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+        {/* <button
           onClick={() => handleSendMessage()}
           className="bg-brand-primary text-white p-4 rounded-full hover:bg-brand-primary-dark disabled:bg-surface-dark-400 disabled:cursor-not-allowed"
           disabled={isLoading || !inputValue.trim()}
@@ -419,7 +610,7 @@ const ChatBox = ({ isAuthReady, initialPrompt }: ChatBoxProps) => {
           >
             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
           </svg>
-        </button>
+        </button> */}
       </div>
     </div>
   );

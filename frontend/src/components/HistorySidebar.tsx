@@ -2,11 +2,14 @@ import React, { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AGENT_NAME, APP_URL } from "../config";
 import { useAtomValue } from "jotai";
-import { sessionTokenAtom, userIdAtom } from "../atoms"; // Import userIdAtom
+import { sessionTokenAtom, userIdAtom, sessionStateAtom } from "../atoms"; // Import atoms
 
 interface Session {
   id: string;
   lastUpdateTime: number;
+  state?: {
+    title?: string;
+  };
 }
 
 interface HistorySidebarProps {
@@ -25,6 +28,7 @@ const HistorySidebar = ({
   const [searchParams, setSearchParams] = useSearchParams();
   const sessionToken = useAtomValue(sessionTokenAtom); // Get sessionToken from Jotai
   const userId = useAtomValue(userIdAtom); // Get userId from Jotai
+  const sessionState = useAtomValue(sessionStateAtom); // Get sessionState from Jotai
 
   useEffect(() => {
     const fetchSessions = async () => {
@@ -68,7 +72,7 @@ const HistorySidebar = ({
       // Fetch only if auth is ready and tokens are available
       fetchSessions();
     }
-  }, [isAuthReady, sessionToken, userId]); // Add sessionToken and userId to dependencies
+  }, [isAuthReady, sessionToken, userId, sessionState]); // Add sessionState to dependencies
 
   const currentSessionId = searchParams.get("sessionId");
 
@@ -102,7 +106,7 @@ const HistorySidebar = ({
                     : "text-text-muted hover:bg-surface-dark-400 hover:text-text-light"
                 }`}
               >
-                {session.id}
+                {session.state?.title || session.id}
               </button>
             </li>
           ))}

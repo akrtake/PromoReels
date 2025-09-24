@@ -8,7 +8,15 @@ import VideoParameters from "./components/VideoParameter";
 import VideoPreview from "./components/VideoPreview";
 import Sidebar from "./components/Sidebar";
 import InitialScreen from "./components/InitialScreen";
-import { userIdAtom, userEmailAtom, sessionTokenAtom } from "./atoms";
+import {
+  userIdAtom,
+  userEmailAtom,
+  sessionTokenAtom,
+  sessionStateAtom,
+  scenesAtom,
+  sceneThemesAtom,
+  defaultScene,
+} from "./atoms";
 import HistorySidebar from "./components/HistorySidebar";
 import { APP_URL, AGENT_NAME } from "./config";
 import { useSetAtom, useAtomValue } from "jotai";
@@ -29,6 +37,9 @@ const App = () => {
   const setSessionToken = useSetAtom(sessionTokenAtom);
   const setUserId = useSetAtom(userIdAtom);
   const setUserEmail = useSetAtom(userEmailAtom); // Add setter for email
+  const setSessionState = useSetAtom(sessionStateAtom);
+  const setScenes = useSetAtom(scenesAtom);
+  const setSceneThemes = useSetAtom(sceneThemesAtom);
   const sessionToken = useAtomValue(sessionTokenAtom);
   const userId = useAtomValue(userIdAtom);
 
@@ -87,6 +98,27 @@ const App = () => {
 
       const sessionIdFromQuery = searchParams.get("sessionId");
       if (sessionIdFromQuery) {
+        setIsStarted(true);
+        const isValidUrl = (urlString: string | undefined | null): boolean => {
+          if (!urlString) return false;
+          try {
+            // 簡単なチェックとして、http, https, gs, blob, data スキームを許可
+            return /^(https?:\/\/|gs:\/\/|blob:|data:)/.test(urlString);
+          } catch (e) {
+            return false;
+          }
+        };
+        const sanitizeSceneConfig = (state: any) => {
+          if (!state?.scene_config) return state;
+          const newSceneConfig = { ...state.scene_config };
+          for (const key in newSceneConfig) {
+            const scene = newSceneConfig[key];
+            if (scene && !isValidUrl(scene.imageUrl)) {
+              scene.imageUrl = "";
+            }
+          }
+          return { ...state, scene_config: newSceneConfig };
+        };
         try {
           const API_ENDPOINT = `${APP_BASE_URL}/apps/${AGENT_NAME}/users/${userId}/sessions/${sessionIdFromQuery}`;
           const response = await fetch(API_ENDPOINT, {
@@ -99,8 +131,15 @@ const App = () => {
 
           if (response.ok) {
             setIsStarted(true); // 既存セッションが見つかったので初期画面をスキップ
+            const data = await response.json();
+            // console.log("Existing session data:", data);
+            if (data.state) {
+              const sanitizedState = sanitizeSceneConfig(data.state);
+              setSessionState(sanitizedState);
+            }
           } else {
             // セッションが見つからない、またはエラー
+            setIsStarted(false);
             console.warn(
               `Session ${sessionIdFromQuery} not found, removing from URL.`
             );
@@ -113,7 +152,14 @@ const App = () => {
       }
     };
     checkExistingSession();
-  }, [isSessionChecked, userId, sessionToken, searchParams, setSearchParams]);
+  }, [
+    isSessionChecked,
+    userId,
+    sessionToken,
+    searchParams,
+    setSearchParams,
+    setSessionState,
+  ]);
 
   const handleMenuClick = (item: string) => {
     if (item === "History") {
@@ -137,7 +183,7 @@ const App = () => {
     setIsSidebarOpen(false);
   };
 
-  const handleStart = async (prompt: string) => {
+  const handleStart = async (prompt: string): Promise<void> => {
     if (!userId || !sessionToken) {
       console.error(
         "Cannot start new session: userId or sessionToken is missing."
@@ -172,7 +218,27 @@ const App = () => {
 
   const handleNewChat = () => {
     setIsVideoPreviewOpen(false); // VideoPreviewを閉じる
-    navigate("/app");
+    setSessionState(null); // セッションの状態をクリア
+    setScenes([defaultScene]); // シーンのパラメータをデフォルトにリセット
+    setSceneThemes([]); // シーンのテーマをクリア
+    setInitialPrompt(null); // 初期プロンプトをクリア
+    navigate("/app", { replace: true }); // URLからsessionIdを削除
+    setIsStarted(false); // 初期画面に戻す
+  };
+
+  const handleLogout = async () => {
+    try {
+      const response = await fetch("/api/sessionLogout", {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error("Logout failed");
+      }
+      // ログアウト成功後、ログインページにリダイレクト
+      window.location.href = "/login";
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
   };
 
   // セッションチェックが完了するまでローディング画面を表示
@@ -192,7 +258,9 @@ const App = () => {
         onVideoPreviewClick={handleVideoPreviewToggle}
         onChatViewClick={handleChatViewClick}
         onNewChat={handleNewChat}
+        onLogout={handleLogout}
         isVideoPreviewOpen={isVideoPreviewOpen}
+        isStarted={isStarted}
       />
       <div className="flex flex-grow overflow-hidden relative">
         <Sidebar
@@ -221,7 +289,7 @@ const App = () => {
           }}
         >
           <main
-            className={`p-6 flex flex-col transition-all duration-300 ${
+            className={`px-6 py-3 flex flex-col transition-all duration-300 ${
               isHistorySidebarOpen || isSidebarOpen
                 ? "blur-sm pointer-events-none"
                 : ""
@@ -232,7 +300,7 @@ const App = () => {
                 <div
                   className="flex space-x-4"
                   style={{
-                    height: "calc(100vh - var(--header-height) - 3rem - 1rem)",
+                    height: "calc(100vh - var(--header-height) - 2rem)",
                   }}
                 >
                   <VideoParameters />
@@ -244,7 +312,7 @@ const App = () => {
               </>
             ) : (
               <div
-                style={{ height: "calc(100vh - var(--header-height) - 3rem)" }}
+                style={{ height: "calc(100vh - var(--header-height) - 2rem)" }}
               >
                 <InitialScreen onStart={handleStart} />
               </div>

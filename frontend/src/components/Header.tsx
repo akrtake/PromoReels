@@ -8,7 +8,9 @@ interface HeaderProps {
   onVideoPreviewClick: () => void;
   onChatViewClick: () => void;
   onNewChat: () => void;
+  onLogout: () => void;
   isVideoPreviewOpen: boolean;
+  isStarted: boolean;
 }
 
 const Header = ({
@@ -17,7 +19,9 @@ const Header = ({
   onChatViewClick,
   onVideoPreviewClick,
   onNewChat,
+  onLogout,
   isVideoPreviewOpen,
+  isStarted,
 }: HeaderProps) => {
   const userEmail = useAtomValue(userEmailAtom);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -64,87 +68,110 @@ const Header = ({
             />
           </svg>
         </button>
-        <img src="/app_icon.png" alt="Aether Reels Logo" className="h-8 w-8" />
-        <span className="text-2xl font-bold">Aether Reels</span>
+        <img src="./app_icon.png" alt="Aether Reels Logo" className="h-8 w-8" />
+        <span className="text-2xl font-bold">Promo Reels</span>
       </div>
       <div className="flex items-center space-x-2">
-        <button
-          onClick={onVideoPreviewClick}
-          className={`p-2 rounded-full transition-colors ${
-            isVideoPreviewOpen
-              ? "text-text-light bg-brand-primary hover:bg-brand-primary-dark hover:text-text-light"
-              : "hover:text-text-light hover:bg-surface-dark-300"
-          }`}
-          aria-label="Show Video Preview"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-5 w-5"
-            viewBox="0 0 24 24"
-            fill="currentColor"
+        <div className="relative group">
+          <button
+            onClick={onVideoPreviewClick}
+            disabled={!isStarted}
+            className={`p-2 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              isVideoPreviewOpen
+                ? "text-text-light bg-brand-primary hover:bg-brand-primary-dark hover:text-text-light"
+                : "hover:text-text-light hover:bg-surface-dark-300"
+            }`}
+            aria-label="Show Video Preview"
           >
-            <path d="M10 16.5l6-4.5-6-4.5v9zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" />
-          </svg>
-        </button>
-        <button
-          onClick={onChatViewClick}
-          className={`p-2 rounded-full transition-colors ${
-            !isVideoPreviewOpen
-              ? "text-text-light bg-brand-primary hover:bg-brand-primary-dark"
-              : "text-text-muted hover:text-text-light hover:bg-surface-dark-300"
-          }`}
-          aria-label="Show Chat"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-5 w-5"
-            viewBox="0 0 20 20"
-            fill="currentColor"
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path d="M10 16.5l6-4.5-6-4.5v9zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" />
+            </svg>
+          </button>
+          <span className="absolute top-full left-1/2 -translate-x-1/2 mt-2 whitespace-nowrap invisible group-hover:visible bg-surface-dark-400 text-text-light text-xs rounded py-1 px-2 z-10">
+            動画
+          </span>
+        </div>
+        <div className="relative group">
+          <button
+            onClick={onChatViewClick}
+            disabled={!isStarted}
+            className={`p-2 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              !isVideoPreviewOpen
+                ? "text-text-light bg-brand-primary hover:bg-brand-primary-dark"
+                : "text-text-muted hover:text-text-light hover:bg-surface-dark-300"
+            }`}
+            aria-label="Show Chat"
           >
-            <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" />
-            <path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h1a2 2 0 002-2V9a2 2 0 00-2-2h-1z" />
-          </svg>
-        </button>
-        <button
-          onClick={onNewChat}
-          className="p-2 rounded-full text-text-muted hover:bg-surface-dark-300 hover:text-text-light transition-colors"
-          aria-label="New Chat"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-5 w-5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" />
+              <path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h1a2 2 0 002-2V9a2 2 0 00-2-2h-1z" />
+            </svg>
+          </button>
+          <span className="absolute top-full left-1/2 -translate-x-1/2 mt-2 whitespace-nowrap invisible group-hover:visible bg-surface-dark-400 text-text-light text-xs rounded py-1 px-2 z-10">
+            チャット
+          </span>
+        </div>
+        <div className="relative group">
+          <button
+            onClick={onNewChat}
+            disabled={!isStarted}
+            className="p-2 rounded-full text-text-muted hover:bg-surface-dark-300 hover:text-text-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="New Chat"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
-        </button>
-        <button
-          onClick={onHistoryClick}
-          className="p-2 rounded-full text-text-muted hover:bg-surface-dark-300 hover:text-text-light transition-colors"
-          aria-label="Show History"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-5 w-5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 4v16m8-8H4"
+              />
+            </svg>
+          </button>
+          <span className="absolute top-full left-1/2 -translate-x-1/2 mt-2 whitespace-nowrap invisible group-hover:visible bg-surface-dark-400 text-text-light text-xs rounded py-1 px-2 z-10">
+            New
+          </span>
+        </div>
+        <div className="relative group">
+          <button
+            onClick={onHistoryClick}
+            className="p-2 rounded-full text-text-muted hover:bg-surface-dark-300 hover:text-text-light transition-colors"
+            aria-label="Show History"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-        </button>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+          </button>
+          <span className="absolute top-full left-1/2 -translate-x-1/2 mt-2 whitespace-nowrap invisible group-hover:visible bg-surface-dark-400 text-text-light text-xs rounded py-1 px-2 z-10">
+            履歴
+          </span>
+        </div>
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={toggleDropdown}
@@ -168,10 +195,20 @@ const Header = ({
             </svg>
           </button>
           {isDropdownOpen && (
-            <div className="absolute right-0 top-10 mt-2 w-auto bg-surface-dark-300 rounded-md shadow-lg py-2 px-4 z-50">
-              <span className="text-sm text-text-light whitespace-nowrap">
-                {userEmail || "Loading..."}
-              </span>
+            <div className="absolute right-0 top-10 mt-2 w-auto min-w-max bg-surface-dark-300 rounded-md shadow-lg z-50 divide-y divide-surface-dark-400">
+              <div className="px-4 py-3">
+                <span className="block text-sm text-text-light whitespace-nowrap">
+                  {userEmail || "Loading..."}
+                </span>
+              </div>
+              <div className="py-1">
+                <button
+                  onClick={onLogout}
+                  className="block w-full text-left px-4 py-2 text-sm text-text-muted hover:bg-surface-dark-400 hover:text-text-light"
+                >
+                  ログアウト
+                </button>
+              </div>
             </div>
           )}
         </div>

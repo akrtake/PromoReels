@@ -82,7 +82,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onLogin }) => {
         </button>
       </div>
 
-      {/* Remember me  */}
+      {/* Remember me  未実装*/}
       <div className="flex justify-between items-center text-sm">
         <label className="flex items-center text-gray-400">
           <input
@@ -182,21 +182,12 @@ const LoginPage: React.FC = () => {
       <div className="bg-surface-dark-200 p-8 rounded-lg shadow-lg max-w-md w-full text-white flex flex-col items-center">
         <div className="flex items-center mb-6">
           {/* Aether Reels ロゴ/アイコン */}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-8 w-8 text-brand-primary mr-2"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9.75 17L9 20l-1 1h8l-1-1-1.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-            />
-          </svg>
-          <span className="text-2xl font-bold">Aether Reels</span>
+          <img
+            src="./app_icon.png"
+            alt="Aether Reels Logo"
+            className="h-8 w-8 mr-2"
+          />
+          <span className="text-2xl font-bold">Promo Reels</span>
         </div>
         <h2 className="text-2xl font-bold text-white mb-2">
           Log in to your account
